@@ -5,7 +5,20 @@ import inspect
 import re
 from latex2mathml.converter import convert as tex2mathml
 from functools import wraps, lru_cache
-############################### 插件输入输出接驳区 #######################################
+
+"""
+========================================================================
+第一部分
+函数插件输入输出接驳区
+    - ChatBotWithCookies:   带Cookies的Chatbot类，为实现更多强大的功能做基础
+    - ArgsGeneralWrapper:   装饰器函数，用于重组输入参数，改变输入参数的顺序与结构
+    - update_ui:            刷新界面用 yield from update_ui(chatbot, history)
+    - CatchException:       将插件中出的所有问题显示在界面上
+    - HotReload:            实现插件的热更新
+    - trimmed_format_exc:   打印traceback，为了安全而隐藏绝对地址
+========================================================================
+"""
+
 class ChatBotWithCookies(list):
     def __init__(self, cookie):
         self._cookies = cookie
@@ -20,32 +33,34 @@ class ChatBotWithCookies(list):
     def get_cookies(self):
         return self._cookies
 
+
 def ArgsGeneralWrapper(f):
     """
     装饰器函数，用于重组输入参数，改变输入参数的顺序与结构。
     """
-    def decorated(cookies, max_length, llm_model, txt, txt2, top_p, temperature, chatbot, history, system_prompt, *args):
+    def decorated(cookies, max_length, llm_model, txt, txt2, top_p, temperature, chatbot, history, system_prompt, plugin_advanced_arg, *args):
         txt_passon = txt
         if txt == "" and txt2 != "": txt_passon = txt2
         # 引入一个有cookie的chatbot
         cookies.update({
-            'top_p':top_p, 
+            'top_p':top_p,
             'temperature':temperature,
         })
         llm_kwargs = {
             'api_key': cookies['api_key'],
             'llm_model': llm_model,
-            'top_p':top_p, 
+            'top_p':top_p,
             'max_length': max_length,
             'temperature':temperature,
         }
         plugin_kwargs = {
-            # 目前还没有
+            "advanced_arg": plugin_advanced_arg,
         }
         chatbot_with_cookie = ChatBotWithCookies(cookies)
         chatbot_with_cookie.write_list(chatbot)
         yield from f(txt_passon, llm_kwargs, plugin_kwargs, chatbot_with_cookie, history, system_prompt, *args)
     return decorated
+
 
 def update_ui(chatbot, history, msg='正常', **kwargs):  # 刷新界面
     """
@@ -54,10 +69,18 @@ def update_ui(chatbot, history, msg='正常', **kwargs):  # 刷新界面
     assert isinstance(chatbot, ChatBotWithCookies), "在传递chatbot的过程中不要将其丢弃。必要时，可用clear将其清空，然后用for+append循环重新赋值。"
     yield chatbot.get_cookies(), chatbot, history, msg
 
+def trimmed_format_exc():
+    import os, traceback
+    str = traceback.format_exc()
+    current_path = os.getcwd()
+    replace_path = "."
+    return str.replace(current_path, replace_path)
+
 def CatchException(f):
     """
     装饰器函数，捕捉函数f中的异常并封装到一个生成器中返回，并显示到聊天当中。
     """
+
     @wraps(f)
     def decorated(txt, top_p, temperature, chatbot, history, systemPromptTxt, WEB_PORT):
         try:
@@ -66,9 +89,10 @@ def CatchException(f):
             from check_proxy import check_proxy
             from toolbox import get_conf
             proxies, = get_conf('proxies')
-            tb_str = '```\n' + traceback.format_exc() + '```'
-            if chatbot is None or len(chatbot) == 0:
-                chatbot = [["插件调度异常", "异常原因"]]
+            tb_str = '```\n' + trimmed_format_exc() + '```'
+            if len(chatbot) == 0:
+                chatbot.clear()
+                chatbot.append(["插件调度异常", "异常原因"])
             chatbot[-1] = (chatbot[-1][0],
                            f"[Local Message] 实验性函数调用出错: \n\n{tb_str} \n\n当前代理可用性: \n\n{check_proxy(proxies)}")
             yield from update_ui(chatbot=chatbot, history=history, msg=f'异常 {e}') # 刷新界面
@@ -93,7 +117,23 @@ def HotReload(f):
     return decorated
 
 
-####################################### 其他小工具 #####################################
+"""
+========================================================================
+第二部分
+其他小工具:
+    - write_results_to_file:    将结果写入markdown文件中
+    - regular_txt_to_markdown:  将普通文本转换为Markdown格式的文本。
+    - report_execption:         向chatbot中添加简单的意外错误信息
+    - text_divide_paragraph:    将文本按照段落分隔符分割开，生成带有段落标签的HTML代码。
+    - markdown_convertion:      用多种方式组合，将markdown转化为好看的html
+    - format_io:                接管gradio默认的markdown处理方式
+    - on_file_uploaded:         处理文件的上传（自动解压）
+    - on_report_generated:      将生成的报告自动投射到文件上传区
+    - clip_history:             当历史上下文过长时，自动截断
+    - get_conf:                 获取设置
+    - select_api_key:           根据当前的模型类别，抽取可用的api-key
+========================================================================
+"""
 
 def get_reduce_token_percent(text):
     """
@@ -111,7 +151,6 @@ def get_reduce_token_percent(text):
         return ratio, str(int(current_tokens-max_limit))
     except:
         return 0.5, '不详'
-
 
 
 def write_results_to_file(history, file_name=None):
@@ -178,13 +217,17 @@ def text_divide_paragraph(text):
         text = "</br>".join(lines)
         return text
 
-
+@lru_cache(maxsize=128) # 使用 lru缓存 加快转换速度
 def markdown_convertion(txt):
     """
     将Markdown格式的文本转换为HTML格式。如果包含数学公式，则先将公式转换为HTML格式。
     """
     pre = '<div class="markdown-body">'
     suf = '</div>'
+    if txt.startswith(pre) and txt.endswith(suf):
+        # print('警告，输入了已经经过转化的字符串，二次转化可能出问题')
+        return txt # 已经被转化过，不需要再次转化
+    
     markdown_extension_configs = {
         'mdx_math': {
             'enable_dollar_delimiter': True,
@@ -219,7 +262,7 @@ def markdown_convertion(txt):
             return content
         else:
             return tex2mathml_catch_exception(content)
-        
+
     def markdown_bug_hunt(content):
         """
         解决一个mdx_math的bug（单$包裹begin命令时多余<script>）
@@ -227,9 +270,15 @@ def markdown_convertion(txt):
         content = content.replace('<script type="math/tex">\n<script type="math/tex; mode=display">', '<script type="math/tex; mode=display">')
         content = content.replace('</script>\n</script>', '</script>')
         return content
-    
 
-    if ('$' in txt) and ('```' not in txt):  # 有$标识的公式符号，且没有代码段```的标识
+    def no_code(txt):
+        if '```' not in txt: 
+            return True
+        else:
+            if '```reference' in txt: return True    # newbing
+            else: return False
+
+    if ('$' in txt) and no_code(txt):  # 有$标识的公式符号，且没有代码段```的标识
         # convert everything to html format
         split = markdown.markdown(text='---')
         convert_stage_1 = markdown.markdown(text=txt, extensions=['mdx_math', 'fenced_code', 'tables', 'sane_lists'], extension_configs=markdown_extension_configs)
@@ -248,7 +297,7 @@ def markdown_convertion(txt):
 def close_up_code_segment_during_stream(gpt_reply):
     """
     在gpt输出代码的中途（输出了前面的```，但还没输出完后面的```），补上后面的```
-    
+
     Args:
         gpt_reply (str): GPT模型返回的回复字符串。
 
@@ -369,6 +418,9 @@ def find_recent_files(directory):
 
 
 def on_file_uploaded(files, chatbot, txt, txt2, checkboxes):
+    """
+    当文件被上传时的回调函数
+    """
     if len(files) == 0:
         return chatbot, txt
     import shutil
@@ -388,8 +440,7 @@ def on_file_uploaded(files, chatbot, txt, txt2, checkboxes):
         shutil.copy(file.name, f'private_upload/{time_tag}/{file_origin_name}')
         err_msg += extract_archive(f'private_upload/{time_tag}/{file_origin_name}',
                                    dest_dir=f'private_upload/{time_tag}/{file_origin_name}.extract')
-    moved_files = [fp for fp in glob.glob(
-        'private_upload/**/*', recursive=True)]
+    moved_files = [fp for fp in glob.glob('private_upload/**/*', recursive=True)]
     if "底部输入区" in checkboxes:
         txt = ""
         txt2 = f'private_upload/{time_tag}'
@@ -414,8 +465,9 @@ def on_report_generated(files, chatbot):
     return report_files, chatbot
 
 def is_openai_api_key(key):
-    API_MATCH = re.match(r"sk-[a-zA-Z0-9]{48}$", key)
-    return bool(API_MATCH)
+    API_MATCH_ORIGINAL = re.match(r"sk-[a-zA-Z0-9]{48}$", key)
+    API_MATCH_AZURE = re.match(r"[a-zA-Z0-9]{32}$", key)
+    return bool(API_MATCH_ORIGINAL) or bool(API_MATCH_AZURE)
 
 def is_api2d_key(key):
     if key.startswith('fk') and len(key) == 41:
@@ -508,10 +560,10 @@ def clear_line_break(txt):
 class DummyWith():
     """
     这段代码定义了一个名为DummyWith的空上下文管理器，
-    它的作用是……额……没用，即在代码结构不变得情况下取代其他的上下文管理器。
+    它的作用是……额……就是不起作用，即在代码结构不变得情况下取代其他的上下文管理器。
     上下文管理器是一种Python对象，用于与with语句一起使用，
     以确保一些资源在代码块执行期间得到正确的初始化和清理。
-    上下文管理器必须实现两个方法，分别为 __enter__()和 __exit__()。 
+    上下文管理器必须实现两个方法，分别为 __enter__()和 __exit__()。
     在上下文执行开始的情况下，__enter__()方法会在代码块被执行前被调用，
     而在上下文执行结束时，__exit__()方法则会被调用。
     """
@@ -520,3 +572,86 @@ class DummyWith():
 
     def __exit__(self, exc_type, exc_value, traceback):
         return
+
+def run_gradio_in_subpath(demo, auth, port, custom_path):
+    """
+    把gradio的运行地址更改到指定的二次路径上
+    """
+    def is_path_legal(path: str)->bool:
+        '''
+        check path for sub url
+        path: path to check
+        return value: do sub url wrap
+        '''
+        if path == "/": return True
+        if len(path) == 0:
+            print("ilegal custom path: {}\npath must not be empty\ndeploy on root url".format(path))
+            return False
+        if path[0] == '/':
+            if path[1] != '/':
+                print("deploy on sub-path {}".format(path))
+                return True
+            return False
+        print("ilegal custom path: {}\npath should begin with \'/\'\ndeploy on root url".format(path))
+        return False
+
+    if not is_path_legal(custom_path): raise RuntimeError('Ilegal custom path')
+    import uvicorn
+    import gradio as gr
+    from fastapi import FastAPI
+    app = FastAPI()
+    if custom_path != "/":
+        @app.get("/")
+        def read_main(): 
+            return {"message": f"Gradio is running at: {custom_path}"}
+    app = gr.mount_gradio_app(app, demo, path=custom_path)
+    uvicorn.run(app, host="0.0.0.0", port=port) # , auth=auth
+
+
+def clip_history(inputs, history, tokenizer, max_token_limit):
+    """
+    reduce the length of history by clipping.
+    this function search for the longest entries to clip, little by little,
+    until the number of token of history is reduced under threshold.
+    通过裁剪来缩短历史记录的长度。 
+    此函数逐渐地搜索最长的条目进行剪辑，
+    直到历史记录的标记数量降低到阈值以下。
+    """
+    import numpy as np
+    from request_llm.bridge_all import model_info
+    def get_token_num(txt): 
+        return len(tokenizer.encode(txt, disallowed_special=()))
+    input_token_num = get_token_num(inputs)
+    if input_token_num < max_token_limit * 3 / 4:
+        # 当输入部分的token占比小于限制的3/4时，裁剪时
+        # 1. 把input的余量留出来
+        max_token_limit = max_token_limit - input_token_num
+        # 2. 把输出用的余量留出来
+        max_token_limit = max_token_limit - 128
+        # 3. 如果余量太小了，直接清除历史
+        if max_token_limit < 128:
+            history = []
+            return history
+    else:
+        # 当输入部分的token占比 > 限制的3/4时，直接清除历史
+        history = []
+        return history
+
+    everything = ['']
+    everything.extend(history)
+    n_token = get_token_num('\n'.join(everything))
+    everything_token = [get_token_num(e) for e in everything]
+
+    # 截断时的颗粒度
+    delta = max(everything_token) // 16
+
+    while n_token > max_token_limit:
+        where = np.argmax(everything_token)
+        encoded = tokenizer.encode(everything[where], disallowed_special=())
+        clipped_encoded = encoded[:len(encoded)-delta]
+        everything[where] = tokenizer.decode(clipped_encoded)[:-1]    # -1 to remove the may-be illegal char
+        everything_token[where] = get_token_num(everything[where])
+        n_token = get_token_num('\n'.join(everything))
+
+    history = everything[1:]
+    return history
