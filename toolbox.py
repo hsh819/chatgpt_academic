@@ -3,6 +3,7 @@ import importlib
 import traceback
 import inspect
 import re
+import os
 from latex2mathml.converter import convert as tex2mathml
 from functools import wraps, lru_cache
 
@@ -167,14 +168,17 @@ def write_results_to_file(history, file_name=None):
     with open(f'./gpt_log/{file_name}', 'w', encoding='utf8') as f:
         f.write('# chatGPT 分析报告\n')
         for i, content in enumerate(history):
-            try:    # 这个bug没找到触发条件，暂时先这样顶一下
-                if type(content) != str:
-                    content = str(content)
+            try:    
+                if type(content) != str: content = str(content)
             except:
                 continue
             if i % 2 == 0:
                 f.write('## ')
-            f.write(content)
+            try:
+                f.write(content)
+            except:
+                # remove everything that cannot be handled by utf8
+                f.write(content.encode('utf-8', 'ignore').decode())
             f.write('\n\n')
     res = '以上材料已经被写入' + os.path.abspath(f'./gpt_log/{file_name}')
     print(res)
@@ -461,7 +465,7 @@ def on_report_generated(files, chatbot):
     if len(report_files) == 0:
         return None, chatbot
     # files.extend(report_files)
-    chatbot.append(['汇总报告如何远程获取？', '汇总报告已经添加到右侧“文件上传区”（可能处于折叠状态），请查收。'])
+    chatbot.append(['报告如何远程获取？', '报告已经添加到右侧“文件上传区”（可能处于折叠状态），请查收。'])
     return report_files, chatbot
 
 def is_openai_api_key(key):
@@ -517,13 +521,75 @@ def select_api_key(keys, llm_model):
     api_key = random.choice(avail_key_list) # 随机负载均衡
     return api_key
 
+def read_env_variable(arg, default_value):
+    """
+    环境变量可以是 `GPT_ACADEMIC_CONFIG`(优先)，也可以直接是`CONFIG`
+    例如在windows cmd中，既可以写：
+        set USE_PROXY=True
+        set API_KEY=sk-j7caBpkRoxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        set proxies={"http":"http://127.0.0.1:10085", "https":"http://127.0.0.1:10085",}
+        set AVAIL_LLM_MODELS=["gpt-3.5-turbo", "chatglm"]
+        set AUTHENTICATION=[("username", "password"), ("username2", "password2")]
+    也可以写：
+        set GPT_ACADEMIC_USE_PROXY=True
+        set GPT_ACADEMIC_API_KEY=sk-j7caBpkRoxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        set GPT_ACADEMIC_proxies={"http":"http://127.0.0.1:10085", "https":"http://127.0.0.1:10085",}
+        set GPT_ACADEMIC_AVAIL_LLM_MODELS=["gpt-3.5-turbo", "chatglm"]
+        set GPT_ACADEMIC_AUTHENTICATION=[("username", "password"), ("username2", "password2")]
+    """
+    from colorful import print亮红, print亮绿
+    arg_with_prefix = "GPT_ACADEMIC_" + arg 
+    if arg_with_prefix in os.environ: 
+        env_arg = os.environ[arg_with_prefix]
+    elif arg in os.environ: 
+        env_arg = os.environ[arg]
+    else:
+        raise KeyError
+    print(f"[ENV_VAR] 尝试加载{arg}，默认值：{default_value} --> 修正值：{env_arg}")
+    try:
+        if isinstance(default_value, bool):
+            env_arg = env_arg.strip()
+            if env_arg == 'True': r = True
+            elif env_arg == 'False': r = False
+            else: print('enter True or False, but have:', env_arg); r = default_value
+        elif isinstance(default_value, int):
+            r = int(env_arg)
+        elif isinstance(default_value, float):
+            r = float(env_arg)
+        elif isinstance(default_value, str):
+            r = env_arg.strip()
+        elif isinstance(default_value, dict):
+            r = eval(env_arg)
+        elif isinstance(default_value, list):
+            r = eval(env_arg)
+        elif default_value is None:
+            assert arg == "proxies"
+            r = eval(env_arg)
+        else:
+            print亮红(f"[ENV_VAR] 环境变量{arg}不支持通过环境变量设置! ")
+            raise KeyError
+    except:
+        print亮红(f"[ENV_VAR] 环境变量{arg}加载失败! ")
+        raise KeyError(f"[ENV_VAR] 环境变量{arg}加载失败! ")
+
+    print亮绿(f"[ENV_VAR] 成功读取环境变量{arg}")
+    return r
+
 @lru_cache(maxsize=128)
 def read_single_conf_with_lru_cache(arg):
     from colorful import print亮红, print亮绿, print亮蓝
     try:
-        r = getattr(importlib.import_module('config_private'), arg)
+        # 优先级1. 获取环境变量作为配置
+        default_ref = getattr(importlib.import_module('config'), arg)   # 读取默认值作为数据类型转换的参考
+        r = read_env_variable(arg, default_ref) 
     except:
-        r = getattr(importlib.import_module('config'), arg)
+        try:
+            # 优先级2. 获取config_private中的配置
+            r = getattr(importlib.import_module('config_private'), arg)
+        except:
+            # 优先级3. 获取config中的配置
+            r = getattr(importlib.import_module('config'), arg)
+
     # 在读取API_KEY时，检查一下是不是忘了改config
     if arg == 'API_KEY':
         print亮蓝(f"[API_KEY] 本项目现已支持OpenAI和API2D的api-key。也支持同时填写多个api-key，如API_KEY=\"openai-key1,openai-key2,api2d-key3\"")
@@ -655,3 +721,66 @@ def clip_history(inputs, history, tokenizer, max_token_limit):
 
     history = everything[1:]
     return history
+
+"""
+========================================================================
+第三部分
+其他小工具:
+    - zip_folder:    把某个路径下所有文件压缩，然后转移到指定的另一个路径中（gpt写的）
+    - gen_time_str:  生成时间戳
+========================================================================
+"""
+
+def zip_folder(source_folder, dest_folder, zip_name):
+    import zipfile
+    import os
+    # Make sure the source folder exists
+    if not os.path.exists(source_folder):
+        print(f"{source_folder} does not exist")
+        return
+
+    # Make sure the destination folder exists
+    if not os.path.exists(dest_folder):
+        print(f"{dest_folder} does not exist")
+        return
+
+    # Create the name for the zip file
+    zip_file = os.path.join(dest_folder, zip_name)
+
+    # Create a ZipFile object
+    with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Walk through the source folder and add files to the zip file
+        for foldername, subfolders, filenames in os.walk(source_folder):
+            for filename in filenames:
+                filepath = os.path.join(foldername, filename)
+                zipf.write(filepath, arcname=os.path.relpath(filepath, source_folder))
+
+    # Move the zip file to the destination folder (if it wasn't already there)
+    if os.path.dirname(zip_file) != dest_folder:
+        os.rename(zip_file, os.path.join(dest_folder, os.path.basename(zip_file)))
+        zip_file = os.path.join(dest_folder, os.path.basename(zip_file))
+
+    print(f"Zip file created at {zip_file}")
+
+def gen_time_str():
+    import time
+    return time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+
+
+class ProxyNetworkActivate():
+    """
+    这段代码定义了一个名为TempProxy的空上下文管理器, 用于给一小段代码上代理
+    """
+    def __enter__(self):
+        from toolbox import get_conf
+        proxies, = get_conf('proxies')
+        if 'no_proxy' in os.environ: os.environ.pop('no_proxy')
+        os.environ['HTTP_PROXY'] = proxies['http']
+        os.environ['HTTPS_PROXY'] = proxies['https']
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        os.environ['no_proxy'] = '*'
+        if 'HTTP_PROXY' in os.environ: os.environ.pop('HTTP_PROXY')
+        if 'HTTPS_PROXY' in os.environ: os.environ.pop('HTTPS_PROXY')
+        return

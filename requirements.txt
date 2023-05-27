@@ -1,9 +1,10 @@
-gradio==3.25.0
+gradio==3.28.3
 tiktoken>=0.3.3
 requests[socks]
 transformers
 python-markdown-math
 beautifulsoup4
+prompt_toolkit
 latex2mathml
 python-docx
 mdtex2html
@@ -14,3 +15,4 @@ pymupdf
 openai
 numpy
 arxiv
+rich

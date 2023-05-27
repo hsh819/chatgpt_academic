@@ -1,6 +1,6 @@
 import gradio as gr
 from toolbox import get_conf
-CODE_HIGHLIGHT, = get_conf('CODE_HIGHLIGHT')
+CODE_HIGHLIGHT, ADD_WAIFU = get_conf('CODE_HIGHLIGHT', 'ADD_WAIFU')
 # gradio可用颜色列表
 # gr.themes.utils.colors.slate (石板色)
 # gr.themes.utils.colors.gray (灰色)
@@ -27,6 +27,7 @@ CODE_HIGHLIGHT, = get_conf('CODE_HIGHLIGHT')
 
 
 def adjust_theme():
+
     try:
         color_er = gr.themes.utils.colors.fuchsia
         set_theme = gr.themes.Default(
@@ -80,6 +81,21 @@ def adjust_theme():
             button_cancel_text_color=color_er.c600,
             button_cancel_text_color_dark="white",
         )
+
+        # 添加一个萌萌的看板娘
+        if ADD_WAIFU:
+            js = """
+                <script src="file=docs/waifu_plugin/jquery.min.js"></script>
+                <script src="file=docs/waifu_plugin/jquery-ui.min.js"></script>
+                <script src="file=docs/waifu_plugin/autoload.js"></script>
+            """
+            gradio_original_template_fn = gr.routes.templates.TemplateResponse
+            def gradio_new_template_fn(*args, **kwargs):
+                res = gradio_original_template_fn(*args, **kwargs)
+                res.body = res.body.replace(b'</html>', f'{js}</html>'.encode("utf8"))
+                res.init_headers()
+                return res
+            gr.routes.templates.TemplateResponse = gradio_new_template_fn   # override gradio template
     except:
         set_theme = None
         print('gradio版本较旧, 不能自定义字体和颜色')
@@ -87,35 +103,30 @@ def adjust_theme():
 
 
 advanced_css = """
-/* 设置表格的外边距为1em，内部单元格之间边框合并，空单元格显示. */
 .markdown-body table {
     margin: 1em 0;
     border-collapse: collapse;
     empty-cells: show;
 }
 
-/* 设置表格单元格的内边距为5px，边框粗细为1.2px，颜色为--border-color-primary. */
 .markdown-body th, .markdown-body td {
     border: 1.2px solid var(--border-color-primary);
     padding: 5px;
 }
 
-/* 设置表头背景颜色为rgba(175,184,193,0.2)，透明度为0.2. */
 .markdown-body thead {
     background-color: rgba(175,184,193,0.2);
 }
 
-/* 设置表头单元格的内边距为0.5em和0.2em. */
 .markdown-body thead th {
     padding: .5em .2em;
 }
 
-/* 去掉列表前缀的默认间距，使其与文本线对齐. */
 .markdown-body ol, .markdown-body ul {
     padding-inline-start: 2em !important;
 }
 
-/* 设定聊天气泡的样式，包括圆角、最大宽度和阴影等. */
+/* chat box. */
 [class *= "message"] {
     border-radius: var(--radius-xl) !important;
     /* padding: var(--spacing-xl) !important; */
@@ -135,7 +146,7 @@ advanced_css = """
     border-bottom-right-radius: 0 !important;
 }
 
-/* 行内代码的背景设为淡灰色，设定圆角和间距. */
+/* linein code block. */
 .markdown-body code {
     display: inline;
     white-space: break-spaces;
@@ -155,7 +166,7 @@ advanced_css = """
     background-color: rgba(175,184,193,0.2);
 }
 
-/* 设定代码块的样式，包括背景颜色、内、外边距、圆角。 */
+/* code block css */
 .markdown-body pre code {
     display: block;
     overflow: auto;
