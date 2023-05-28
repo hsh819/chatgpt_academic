@@ -3,9 +3,9 @@
 # 如何运行: docker run --rm -it --net=host gpt-academic
 FROM python:3.11
 
-RUN echo '[global]' > /etc/pip.conf && \
-    echo 'index-url = https://mirrors.aliyun.com/pypi/simple/' >> /etc/pip.conf && \
-    echo 'trusted-host = mirrors.aliyun.com' >> /etc/pip.conf
+# RUN echo '[global]' > /etc/pip.conf && \
+#     echo 'index-url = https://mirrors.aliyun.com/pypi/simple/' >> /etc/pip.conf && \
+#     echo 'trusted-host = mirrors.aliyun.com' >> /etc/pip.conf
 
 
 WORKDIR /gpt
